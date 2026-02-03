@@ -11,7 +11,7 @@ interface ResponseData {
   respondent_department: string | null
   respondent_role: string | null
   respondent_company: string | null
-  section_scores: Record<string, { score: number; max: number; percentage: number }>
+  section_scores: Record<string, number | { score: number; max: number; percentage: number }>
   overall_score: number
   completed_at: string | null
 }
@@ -27,6 +27,14 @@ const SECTIONS = [
   { key: 'overload', name: 'Overload', short: 'Overload' }
 ]
 
+// Convert 1-4 scale to percentage (1=25%, 4=100%)
+const toPercentage = (score: number | { percentage: number } | undefined): number | null => {
+  if (score === undefined || score === null) return null
+  if (typeof score === 'object' && 'percentage' in score) return score.percentage
+  // Convert 1-4 scale to 25-100%
+  return Math.round((score / 4) * 100)
+}
+
 const getHeatColor = (score: number | null) => {
   if (score === null || score === undefined) return 'bg-gray-100'
   if (score >= 85) return 'bg-emerald-500'
@@ -39,25 +47,31 @@ const getHeatColor = (score: number | null) => {
 
 const getTextColor = (score: number | null) => {
   if (score === null || score === undefined) return 'text-gray-400'
-  if (score >= 65) return 'text-white'
   return 'text-white'
 }
 
 export default function AnalyticsPage() {
   const [responses, setResponses] = useState<ResponseData[]>([])
   const [loading, setLoading] = useState(true)
+  const [companyFilter, setCompanyFilter] = useState<string>('')
   const router = useRouter()
 
   // Aggregated data
   const [deptSectionData, setDeptSectionData] = useState<Record<string, Record<string, number>>>({})
   const [roleSectionData, setRoleSectionData] = useState<Record<string, Record<string, number>>>({})
   const [deptRoleData, setDeptRoleData] = useState<Record<string, Record<string, number>>>({})
-  const [problemAreas, setProblemAreas] = useState<{section: string, score: number, dept?: string}[]>([])
+  const [problemAreas, setProblemAreas] = useState<{section: string, score: number}[]>([])
   const [deptGaps, setDeptGaps] = useState<{section: string, highDept: string, lowDept: string, gap: number}[]>([])
   const [speakingUpAlerts, setSpeakingUpAlerts] = useState<{dept: string, score: number}[]>([])
+  const [perceptionGap, setPerceptionGap] = useState<{section: string, execScore: number, staffScore: number, gap: number}[]>([])
 
-  const departments = [...new Set(responses.map(r => r.respondent_department).filter(Boolean))] as string[]
-  const roles = [...new Set(responses.map(r => r.respondent_role).filter(Boolean))] as string[]
+  const companies = [...new Set(responses.map(r => r.respondent_company).filter(Boolean))] as string[]
+  const filteredResponses = companyFilter 
+    ? responses.filter(r => r.respondent_company === companyFilter)
+    : responses
+
+  const departments = [...new Set(filteredResponses.map(r => r.respondent_department).filter(Boolean))] as string[]
+  const roles = [...new Set(filteredResponses.map(r => r.respondent_role).filter(Boolean))] as string[]
 
   useEffect(() => {
     const isAuth = localStorage.getItem('ttc_admin_auth')
@@ -69,10 +83,10 @@ export default function AnalyticsPage() {
   }, [router])
 
   useEffect(() => {
-    if (responses.length > 0) {
+    if (filteredResponses.length > 0) {
       calculateAggregates()
     }
-  }, [responses])
+  }, [filteredResponses, companyFilter])
 
   const fetchData = async () => {
     const { data, error } = await supabase
@@ -87,27 +101,27 @@ export default function AnalyticsPage() {
     setLoading(false)
   }
 
+  const getSectionScore = (r: ResponseData, sectionKey: string): number | null => {
+    const score = r.section_scores?.[sectionKey]
+    return toPercentage(score)
+  }
+
   const calculateAggregates = () => {
-    // Department x Section
     const deptSection: Record<string, Record<string, number[]>> = {}
-    // Role x Section
     const roleSection: Record<string, Record<string, number[]>> = {}
-    // Department x Role
     const deptRole: Record<string, Record<string, number[]>> = {}
 
-    responses.forEach(r => {
+    filteredResponses.forEach(r => {
       const dept = r.respondent_department || 'Unknown'
       const role = r.respondent_role || 'Unknown'
 
-      // Initialize
       if (!deptSection[dept]) deptSection[dept] = {}
       if (!roleSection[role]) roleSection[role] = {}
       if (!deptRole[dept]) deptRole[dept] = {}
 
-      // Aggregate section scores by department
       SECTIONS.forEach(s => {
-        const score = r.section_scores?.[s.key]?.percentage
-        if (score !== undefined) {
+        const score = getSectionScore(r, s.key)
+        if (score !== null) {
           if (!deptSection[dept][s.key]) deptSection[dept][s.key] = []
           deptSection[dept][s.key].push(score)
 
@@ -116,9 +130,11 @@ export default function AnalyticsPage() {
         }
       })
 
-      // Aggregate overall by dept x role
-      if (!deptRole[dept][role]) deptRole[dept][role] = []
-      deptRole[dept][role].push(r.overall_score)
+      const overallPct = toPercentage(r.overall_score)
+      if (overallPct !== null) {
+        if (!deptRole[dept][role]) deptRole[dept][role] = []
+        deptRole[dept][role].push(overallPct)
+      }
     })
 
     // Calculate averages
@@ -151,12 +167,12 @@ export default function AnalyticsPage() {
     setRoleSectionData(avgRoleSection)
     setDeptRoleData(avgDeptRole)
 
-    // Find problem areas (lowest scoring sections overall)
+    // Problem areas
     const sectionAvgs: {section: string, score: number}[] = []
     SECTIONS.forEach(s => {
-      const allScores = responses
-        .map(r => r.section_scores?.[s.key]?.percentage)
-        .filter(x => x !== undefined) as number[]
+      const allScores = filteredResponses
+        .map(r => getSectionScore(r, s.key))
+        .filter(x => x !== null) as number[]
       if (allScores.length > 0) {
         sectionAvgs.push({
           section: s.name,
@@ -166,7 +182,7 @@ export default function AnalyticsPage() {
     })
     setProblemAreas(sectionAvgs.sort((a, b) => a.score - b.score).slice(0, 3))
 
-    // Find department gaps (biggest differences)
+    // Department gaps
     const gaps: {section: string, highDept: string, lowDept: string, gap: number}[] = []
     SECTIONS.forEach(s => {
       const deptScores = Object.entries(avgDeptSection)
@@ -176,7 +192,7 @@ export default function AnalyticsPage() {
       
       if (deptScores.length >= 2) {
         const gap = deptScores[0].score - deptScores[deptScores.length - 1].score
-        if (gap > 15) {
+        if (gap > 10) {
           gaps.push({
             section: s.name,
             highDept: deptScores[0].dept,
@@ -191,10 +207,41 @@ export default function AnalyticsPage() {
     // Speaking Up alerts
     const speakingAlerts = Object.entries(avgDeptSection)
       .map(([dept, scores]) => ({ dept, score: scores['speaking_up'] }))
-      .filter(x => x.score !== undefined && x.score < 60)
+      .filter(x => x.score !== undefined && x.score < 65)
       .sort((a, b) => a.score - b.score)
     setSpeakingUpAlerts(speakingAlerts)
+
+    // Leadership vs Staff perception gap
+    const execRoles = ['Executive / C-Level', 'Director / VP']
+    const staffRoles = ['Individual Contributor / Staff', 'Intern / Entry Level']
+    
+    const perceptionGaps: {section: string, execScore: number, staffScore: number, gap: number}[] = []
+    SECTIONS.forEach(s => {
+      const execScores = filteredResponses
+        .filter(r => execRoles.includes(r.respondent_role || ''))
+        .map(r => getSectionScore(r, s.key))
+        .filter(x => x !== null) as number[]
+      
+      const staffScores = filteredResponses
+        .filter(r => staffRoles.includes(r.respondent_role || ''))
+        .map(r => getSectionScore(r, s.key))
+        .filter(x => x !== null) as number[]
+
+      if (execScores.length > 0 && staffScores.length > 0) {
+        const execAvg = Math.round(execScores.reduce((a, b) => a + b, 0) / execScores.length)
+        const staffAvg = Math.round(staffScores.reduce((a, b) => a + b, 0) / staffScores.length)
+        const gap = execAvg - staffAvg
+        if (Math.abs(gap) > 10) {
+          perceptionGaps.push({ section: s.name, execScore: execAvg, staffScore: staffAvg, gap })
+        }
+      }
+    })
+    setPerceptionGap(perceptionGaps.sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap)))
   }
+
+  const avgOverall = filteredResponses.length > 0
+    ? Math.round(filteredResponses.reduce((a, r) => a + (toPercentage(r.overall_score) || 0), 0) / filteredResponses.length)
+    : 0
 
   if (loading) {
     return (
@@ -209,21 +256,23 @@ export default function AnalyticsPage() {
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Image
-              src="https://aciqagqaiwsqerczchnx.supabase.co/storage/v1/object/public/assets/3.svg"
-              alt="The Tree Consultancy"
-              width={50}
-              height={50}
-            />
+            <Image src="https://aciqagqaiwsqerczchnx.supabase.co/storage/v1/object/public/assets/3.svg" alt="TTC" width={50} height={50} />
             <div>
               <h1 className="font-bold text-lg text-gray-900">Analytics Dashboard</h1>
               <p className="text-sm text-gray-500">Communication Health Insights</p>
             </div>
           </div>
-          <div className="flex gap-4">
-            <Link href="/admin/dashboard" className="text-slate-600 hover:text-slate-900 text-sm font-medium">
-              ← Responses
-            </Link>
+          <div className="flex items-center gap-4">
+            <select
+              value={companyFilter}
+              onChange={(e) => setCompanyFilter(e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+            >
+              <option value="">All Companies</option>
+              {companies.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <Link href="/admin/orgchart" className="text-emerald-600 hover:text-emerald-800 text-sm font-medium">🏢 Org Chart</Link>
+            <Link href="/admin/dashboard" className="text-slate-600 hover:text-slate-900 text-sm font-medium">← Responses</Link>
           </div>
         </div>
       </header>
@@ -231,57 +280,84 @@ export default function AnalyticsPage() {
       <div className="max-w-7xl mx-auto px-4 py-8">
         {responses.length === 0 ? (
           <div className="bg-white rounded-xl shadow-sm p-12 text-center">
-            <p className="text-gray-500">No completed responses yet. Analytics will appear once surveys are completed.</p>
+            <p className="text-gray-500">No completed responses yet.</p>
           </div>
         ) : (
           <>
             {/* Summary Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
               <div className="bg-white rounded-xl shadow-sm p-6">
-                <p className="text-sm text-gray-500">Total Responses</p>
-                <p className="text-3xl font-bold text-gray-900">{responses.length}</p>
+                <p className="text-sm text-gray-500">Responses</p>
+                <p className="text-3xl font-bold text-gray-900">{filteredResponses.length}</p>
+              </div>
+              <div className="bg-white rounded-xl shadow-sm p-6">
+                <p className="text-sm text-gray-500">Companies</p>
+                <p className="text-3xl font-bold text-blue-600">{companyFilter ? 1 : companies.length}</p>
               </div>
               <div className="bg-white rounded-xl shadow-sm p-6">
                 <p className="text-sm text-gray-500">Departments</p>
-                <p className="text-3xl font-bold text-blue-600">{departments.length}</p>
+                <p className="text-3xl font-bold text-purple-600">{departments.length}</p>
               </div>
               <div className="bg-white rounded-xl shadow-sm p-6">
                 <p className="text-sm text-gray-500">Roles</p>
-                <p className="text-3xl font-bold text-purple-600">{roles.length}</p>
+                <p className="text-3xl font-bold text-indigo-600">{roles.length}</p>
               </div>
               <div className="bg-white rounded-xl shadow-sm p-6">
                 <p className="text-sm text-gray-500">Avg Score</p>
-                <p className="text-3xl font-bold text-emerald-600">
-                  {Math.round(responses.reduce((a, r) => a + r.overall_score, 0) / responses.length)}%
-                </p>
+                <p className={`text-3xl font-bold ${avgOverall >= 75 ? 'text-emerald-600' : avgOverall >= 50 ? 'text-yellow-600' : 'text-red-600'}`}>{avgOverall}%</p>
               </div>
             </div>
 
-            {/* Problem Areas Alert */}
-            {problemAreas.length > 0 && (
-              <div className="bg-red-50 border border-red-200 rounded-xl p-6 mb-8">
-                <h3 className="font-semibold text-red-800 mb-3">⚠️ Areas Needing Attention</h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {problemAreas.map((area, i) => (
-                    <div key={i} className="bg-white rounded-lg p-4 border border-red-100">
-                      <p className="font-medium text-gray-900">{area.section}</p>
-                      <p className="text-2xl font-bold text-red-600">{area.score}%</p>
-                    </div>
-                  ))}
+            {/* Alerts Section */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+              {/* Problem Areas */}
+              {problemAreas.length > 0 && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-6">
+                  <h3 className="font-semibold text-red-800 mb-3">⚠️ Lowest Scoring Areas</h3>
+                  <div className="space-y-2">
+                    {problemAreas.map((area, i) => (
+                      <div key={i} className="flex justify-between items-center bg-white rounded-lg p-3">
+                        <span className="font-medium text-gray-900">{area.section}</span>
+                        <span className={`font-bold ${area.score < 50 ? 'text-red-600' : 'text-orange-600'}`}>{area.score}%</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* Speaking Up Alerts */}
-            {speakingUpAlerts.length > 0 && (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-6 mb-8">
-                <h3 className="font-semibold text-amber-800 mb-3">🚨 Hierarchy/Safety Concern: Low "Speaking Up" Scores</h3>
-                <p className="text-sm text-amber-700 mb-3">These departments may have psychological safety issues:</p>
-                <div className="flex flex-wrap gap-3">
-                  {speakingUpAlerts.map((alert, i) => (
-                    <span key={i} className="bg-amber-100 text-amber-800 px-4 py-2 rounded-lg font-medium">
-                      {alert.dept}: {alert.score}%
-                    </span>
+              {/* Speaking Up Alerts */}
+              {speakingUpAlerts.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-6">
+                  <h3 className="font-semibold text-amber-800 mb-3">🚨 Psychological Safety Concern</h3>
+                  <p className="text-sm text-amber-700 mb-3">Low "Speaking Up" scores may indicate hierarchy issues:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {speakingUpAlerts.map((alert, i) => (
+                      <span key={i} className="bg-amber-100 text-amber-800 px-3 py-1 rounded-full text-sm font-medium">
+                        {alert.dept}: {alert.score}%
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Perception Gap */}
+            {perceptionGap.length > 0 && (
+              <div className="bg-purple-50 border border-purple-200 rounded-xl p-6 mb-8">
+                <h3 className="font-semibold text-purple-800 mb-3">👔 Leadership vs Staff Perception Gap</h3>
+                <p className="text-sm text-purple-700 mb-4">Areas where executives see things differently than staff:</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {perceptionGap.map((p, i) => (
+                    <div key={i} className="bg-white rounded-lg p-4 border border-purple-100">
+                      <p className="font-medium text-gray-900 mb-2">{p.section}</p>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-purple-600">Exec: {p.execScore}%</span>
+                        <span className="text-gray-600">Staff: {p.staffScore}%</span>
+                        <span className={`font-bold ${p.gap > 0 ? 'text-red-500' : 'text-blue-500'}`}>
+                          {p.gap > 0 ? '+' : ''}{p.gap}
+                        </span>
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -291,16 +367,16 @@ export default function AnalyticsPage() {
             {deptGaps.length > 0 && (
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 mb-8">
                 <h3 className="font-semibold text-blue-800 mb-3">📊 Biggest Department Gaps</h3>
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {deptGaps.map((gap, i) => (
-                    <div key={i} className="bg-white rounded-lg p-4 border border-blue-100 flex items-center justify-between">
+                    <div key={i} className="bg-white rounded-lg p-3 flex items-center justify-between">
                       <div>
-                        <p className="font-medium text-gray-900">{gap.section}</p>
-                        <p className="text-sm text-gray-500">
-                          <span className="text-emerald-600 font-medium">{gap.highDept}</span> vs <span className="text-red-600 font-medium">{gap.lowDept}</span>
-                        </p>
+                        <span className="font-medium text-gray-900">{gap.section}</span>
+                        <span className="text-sm text-gray-500 ml-2">
+                          <span className="text-emerald-600">{gap.highDept}</span> → <span className="text-red-600">{gap.lowDept}</span>
+                        </span>
                       </div>
-                      <span className="text-xl font-bold text-blue-600">{gap.gap}pt gap</span>
+                      <span className="font-bold text-blue-600">{gap.gap}pt gap</span>
                     </div>
                   ))}
                 </div>
@@ -323,7 +399,7 @@ export default function AnalyticsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {Object.entries(deptSectionData).map(([dept, scores]) => (
+                    {Object.entries(deptSectionData).sort((a, b) => a[0].localeCompare(b[0])).map(([dept, scores]) => (
                       <tr key={dept}>
                         <td className="p-2 text-sm font-medium text-gray-900 border-t">{dept}</td>
                         {SECTIONS.map(s => {
@@ -341,8 +417,6 @@ export default function AnalyticsPage() {
                   </tbody>
                 </table>
               </div>
-
-              {/* Legend */}
               <div className="flex items-center gap-2 mt-6 justify-center">
                 <span className="text-xs text-gray-500">Low</span>
                 <div className="w-6 h-4 bg-red-500 rounded"></div>
@@ -358,7 +432,7 @@ export default function AnalyticsPage() {
             {/* HEATMAP 2: Role x Section */}
             <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
               <h2 className="font-bold text-lg text-gray-900 mb-2">👔 Role × Section Heatmap</h2>
-              <p className="text-sm text-gray-500 mb-6">How do executives vs staff perceive communication differently?</p>
+              <p className="text-sm text-gray-500 mb-6">How do different seniority levels perceive communication?</p>
               
               <div className="overflow-x-auto">
                 <table className="w-full">
@@ -394,7 +468,7 @@ export default function AnalyticsPage() {
             {/* HEATMAP 3: Department x Role */}
             <div className="bg-white rounded-xl shadow-sm p-6 mb-8">
               <h2 className="font-bold text-lg text-gray-900 mb-2">🏢 Department × Role Heatmap</h2>
-              <p className="text-sm text-gray-500 mb-6">Overall scores by department and seniority level</p>
+              <p className="text-sm text-gray-500 mb-6">Overall satisfaction by department and seniority</p>
               
               <div className="overflow-x-auto">
                 <table className="w-full">
@@ -402,12 +476,12 @@ export default function AnalyticsPage() {
                     <tr>
                       <th className="text-left p-2 text-sm font-medium text-gray-500 min-w-[140px]">Department</th>
                       {roles.map(role => (
-                        <th key={role} className="p-2 text-xs font-medium text-gray-500 text-center min-w-[100px]">{role.split('/')[0]}</th>
+                        <th key={role} className="p-2 text-xs font-medium text-gray-500 text-center min-w-[90px]">{role.split(' / ')[0]}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {Object.entries(deptRoleData).map(([dept, roleScores]) => (
+                    {Object.entries(deptRoleData).sort((a, b) => a[0].localeCompare(b[0])).map(([dept, roleScores]) => (
                       <tr key={dept}>
                         <td className="p-2 text-sm font-medium text-gray-900 border-t">{dept}</td>
                         {roles.map(role => {
@@ -427,7 +501,7 @@ export default function AnalyticsPage() {
               </div>
             </div>
 
-            {/* Color Legend */}
+            {/* Score Legend */}
             <div className="bg-white rounded-xl shadow-sm p-6">
               <h3 className="font-medium text-gray-900 mb-4">Score Guide</h3>
               <div className="grid grid-cols-6 gap-2 text-center text-sm">
