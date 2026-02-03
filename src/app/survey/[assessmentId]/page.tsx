@@ -63,6 +63,8 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
   const [currentSectionIndex, setCurrentSectionIndex] = useState(0)
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [answers, setAnswers] = useState<Record<string, number>>({})
+  const [openResponses, setOpenResponses] = useState<Record<string, string>>({})
+  const [currentOpenResponse, setCurrentOpenResponse] = useState('')
   const [responseId, setResponseId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -126,9 +128,9 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
   const currentSection = sections[currentSectionIndex]
   const currentQuestion = currentSection?.questions[currentQuestionIndex]
   const totalQuestions = sections.reduce((acc, s) => acc + s.questions.length, 0)
-  const answeredQuestions = Object.keys(answers).length
+  const answeredQuestions = Object.keys(answers).length + Object.keys(openResponses).length
 
-  const handleAnswer = async (value: number) => {
+  const handleScaleAnswer = async (value: number) => {
     if (!currentQuestion || !responseId) return
 
     const newAnswers = { ...answers, [currentQuestion.id]: value }
@@ -139,17 +141,47 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
       .update({ answers: newAnswers })
       .eq('id', responseId)
 
+    moveToNextQuestion()
+  }
+
+  const handleOpenAnswer = async () => {
+    if (!currentQuestion || !responseId) return
+
+    const newOpenResponses = { ...openResponses, [currentQuestion.id]: currentOpenResponse }
+    setOpenResponses(newOpenResponses)
+
+    await supabase
+      .from('ttc_responses')
+      .update({ open_responses: newOpenResponses })
+      .eq('id', responseId)
+
+    setCurrentOpenResponse('')
+    moveToNextQuestion()
+  }
+
+  const moveToNextQuestion = () => {
     if (currentQuestionIndex < currentSection.questions.length - 1) {
       setCurrentQuestionIndex(currentQuestionIndex + 1)
+      // Load existing open response if going to an open question
+      const nextQuestion = currentSection.questions[currentQuestionIndex + 1]
+      if (nextQuestion?.question_type === 'open' && openResponses[nextQuestion.id]) {
+        setCurrentOpenResponse(openResponses[nextQuestion.id])
+      }
     } else if (currentSectionIndex < sections.length - 1) {
       setCurrentSectionIndex(currentSectionIndex + 1)
       setCurrentQuestionIndex(0)
+      // Load existing open response if going to an open question
+      const nextSection = sections[currentSectionIndex + 1]
+      const nextQuestion = nextSection?.questions[0]
+      if (nextQuestion?.question_type === 'open' && openResponses[nextQuestion.id]) {
+        setCurrentOpenResponse(openResponses[nextQuestion.id])
+      }
     } else {
-      await submitSurvey(newAnswers)
+      submitSurvey()
     }
   }
 
-  const submitSurvey = async (finalAnswers: Record<string, number>) => {
+  const submitSurvey = async () => {
     setSubmitting(true)
 
     const sectionScores: Record<string, { score: number; max: number; percentage: number }> = {}
@@ -160,18 +192,20 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
       let sectionTotal = 0
       let sectionMax = 0
       section.questions.forEach(q => {
-        if (finalAnswers[q.id]) {
-          sectionTotal += finalAnswers[q.id] * q.weight
+        if (q.question_type === 'scale' && answers[q.id]) {
+          sectionTotal += answers[q.id] * q.weight
           sectionMax += 4 * q.weight
         }
       })
-      sectionScores[section.key] = {
-        score: sectionTotal,
-        max: sectionMax,
-        percentage: sectionMax > 0 ? Math.round((sectionTotal / sectionMax) * 100) : 0
+      if (sectionMax > 0) {
+        sectionScores[section.key] = {
+          score: sectionTotal,
+          max: sectionMax,
+          percentage: Math.round((sectionTotal / sectionMax) * 100)
+        }
+        totalScore += sectionTotal
+        maxScore += sectionMax
       }
-      totalScore += sectionTotal
-      maxScore += sectionMax
     })
 
     const overallScore = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0
@@ -179,7 +213,6 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
     await supabase
       .from('ttc_responses')
       .update({
-        answers: finalAnswers,
         section_scores: sectionScores,
         overall_score: overallScore,
         completed_at: new Date().toISOString()
@@ -192,10 +225,22 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
   const goBack = () => {
     if (currentQuestionIndex > 0) {
       setCurrentQuestionIndex(currentQuestionIndex - 1)
+      const prevQuestion = currentSection.questions[currentQuestionIndex - 1]
+      if (prevQuestion?.question_type === 'open' && openResponses[prevQuestion.id]) {
+        setCurrentOpenResponse(openResponses[prevQuestion.id])
+      } else {
+        setCurrentOpenResponse('')
+      }
     } else if (currentSectionIndex > 0) {
       setCurrentSectionIndex(currentSectionIndex - 1)
       const prevSection = sections[currentSectionIndex - 1]
       setCurrentQuestionIndex(prevSection.questions.length - 1)
+      const prevQuestion = prevSection.questions[prevSection.questions.length - 1]
+      if (prevQuestion?.question_type === 'open' && openResponses[prevQuestion.id]) {
+        setCurrentOpenResponse(openResponses[prevQuestion.id])
+      } else {
+        setCurrentOpenResponse('')
+      }
     }
   }
 
@@ -230,7 +275,6 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
             <p className="text-gray-600">Tell us a bit about yourself (all fields are optional)</p>
           </div>
 
-          {/* Privacy Notice */}
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mb-8">
             <p className="text-sm text-emerald-800">
               🔒 Your responses are confidential. Personal information will not be shared with your organization or any third party. Data is used only for aggregate analysis and improving organizational communication.
@@ -239,7 +283,6 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
 
           <div className="bg-white rounded-2xl shadow-lg p-8">
             <div className="space-y-6">
-              {/* Name */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Full Name <span className="text-gray-400 font-normal">(optional)</span>
@@ -253,7 +296,6 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
                 />
               </div>
 
-              {/* Email */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Email <span className="text-gray-400 font-normal">(optional)</span>
@@ -267,7 +309,6 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
                 />
               </div>
 
-              {/* Company */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Company / Organization <span className="text-gray-400 font-normal">(optional)</span>
@@ -281,7 +322,6 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
                 />
               </div>
 
-              {/* Department */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Department <span className="text-gray-400 font-normal">(optional)</span>
@@ -298,7 +338,6 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
                 </select>
               </div>
 
-              {/* Role */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Position / Role <span className="text-gray-400 font-normal">(optional)</span>
@@ -315,7 +354,6 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
                 </select>
               </div>
 
-              {/* Company Size */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Company Size <span className="text-gray-400 font-normal">(optional)</span>
@@ -356,6 +394,8 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
     )
   }
 
+  const isOpenQuestion = currentQuestion?.question_type === 'open'
+
   return (
     <main className="min-h-screen bg-gradient-to-b from-emerald-50 to-white">
       <header className="bg-white shadow-sm">
@@ -393,30 +433,52 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
             {currentQuestion?.question_text}
           </h3>
 
-          <div className="space-y-3">
-            {currentQuestion?.options.map((option) => (
+          {isOpenQuestion ? (
+            <div className="space-y-4">
+              <textarea
+                value={currentOpenResponse}
+                onChange={(e) => setCurrentOpenResponse(e.target.value)}
+                placeholder="Type your response here..."
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 min-h-[150px] resize-y"
+              />
               <button
-                key={option.value}
-                onClick={() => handleAnswer(option.value)}
-                className={`w-full p-4 text-left rounded-xl border-2 transition-all ${
-                  answers[currentQuestion.id] === option.value
-                    ? 'border-emerald-500 bg-emerald-50'
-                    : 'border-gray-200 hover:border-emerald-300 hover:bg-emerald-50/50'
-                }`}
+                onClick={handleOpenAnswer}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
               >
-                <div className="flex items-center">
-                  <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium mr-3 ${
-                    answers[currentQuestion.id] === option.value
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-gray-100 text-gray-600'
-                  }`}>
-                    {option.value}
-                  </span>
-                  <span className="text-gray-700">{option.label}</span>
-                </div>
+                {currentSectionIndex === sections.length - 1 && currentQuestionIndex === currentSection.questions.length - 1
+                  ? 'Complete Survey'
+                  : 'Continue →'}
               </button>
-            ))}
-          </div>
+              <p className="text-xs text-gray-400 text-center">
+                You can leave this blank and continue if you prefer
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {currentQuestion?.options.map((option) => (
+                <button
+                  key={option.value}
+                  onClick={() => handleScaleAnswer(option.value)}
+                  className={`w-full p-4 text-left rounded-xl border-2 transition-all ${
+                    answers[currentQuestion.id] === option.value
+                      ? 'border-emerald-500 bg-emerald-50'
+                      : 'border-gray-200 hover:border-emerald-300 hover:bg-emerald-50/50'
+                  }`}
+                >
+                  <div className="flex items-center">
+                    <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium mr-3 ${
+                      answers[currentQuestion.id] === option.value
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-gray-100 text-gray-600'
+                    }`}>
+                      {option.value}
+                    </span>
+                    <span className="text-gray-700">{option.label}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {(currentSectionIndex > 0 || currentQuestionIndex > 0) && (
