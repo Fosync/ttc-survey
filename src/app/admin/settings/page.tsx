@@ -80,7 +80,7 @@ export default function AISettingsPage() {
 
   const [settings, setSettings] = useState<Settings>({
     ai_language: 'en',
-    ai_model: 'gemini-1.5-pro',
+    ai_model: 'gemini-1.5-pro-latest',
     individual_prompt_en: DEFAULT_PROMPTS.individual.en,
     individual_prompt_tr: DEFAULT_PROMPTS.individual.tr,
     company_prompt_en: DEFAULT_PROMPTS.company.en,
@@ -105,7 +105,7 @@ export default function AISettingsPage() {
     if (data) {
       setSettings({
         ai_language: data.ai_language || 'en',
-        ai_model: data.ai_model || 'gemini-1.5-pro',
+        ai_model: data.ai_model || 'gemini-1.5-pro-latest',
         individual_prompt_en: data.individual_prompt_en || DEFAULT_PROMPTS.individual.en,
         individual_prompt_tr: data.individual_prompt_tr || DEFAULT_PROMPTS.individual.tr,
         company_prompt_en: data.company_prompt_en || DEFAULT_PROMPTS.company.en,
@@ -294,8 +294,8 @@ export default function AISettingsPage() {
                 onChange={(e) => setSettings({ ...settings, ai_model: e.target.value })}
                 className="w-full px-4 py-2 border rounded-lg bg-white"
               >
-                <option value="gemini-1.5-pro">Gemini 1.5 Pro (Recommended)</option>
-                <option value="gemini-1.5-flash">Gemini 1.5 Flash (Faster)</option>
+                <option value="gemini-1.5-pro-latest">Gemini 1.5 Pro (Recommended)</option>
+                <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash (Faster)</option>
               </select>
             </div>
           </div>
