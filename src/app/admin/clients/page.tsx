@@ -101,26 +101,31 @@ export default function ClientsPage() {
   }, [router])
 
   const fetchData = async () => {
-    // Fetch clients
-    const { data: clientsData } = await supabase
-      .from('ttc_clients')
-      .select('*')
-      .order('created_at', { ascending: false })
+    try {
+      // Fetch clients
+      const { data: clientsData, error: clientsError } = await supabase
+        .from('ttc_clients')
+        .select('*')
+        .order('created_at', { ascending: false })
 
-    // Fetch assessments with response counts
-    const { data: assessmentsData } = await supabase
-      .from('ttc_assessments')
-      .select('*')
-      .order('created_at', { ascending: false })
+      if (clientsError) console.log('ttc_clients table may not exist:', clientsError.message)
 
-    // Fetch existing companies from responses (not yet in ttc_clients)
-    const { data: responsesData } = await supabase
-      .from('ttc_responses')
-      .select('respondent_company, company_size, overall_score')
-      .not('completed_at', 'is', null)
-      .not('respondent_company', 'is', null)
+      // Fetch assessments with response counts
+      const { data: assessmentsData, error: assessmentsError } = await supabase
+        .from('ttc_assessments')
+        .select('*')
+        .order('created_at', { ascending: false })
 
-    if (clientsData) setClients(clientsData)
+      if (assessmentsError) console.log('ttc_assessments error:', assessmentsError.message)
+
+      // Fetch existing companies from responses (not yet in ttc_clients)
+      const { data: responsesData } = await supabase
+        .from('ttc_responses')
+        .select('respondent_company, company_size, overall_score')
+        .not('completed_at', 'is', null)
+        .not('respondent_company', 'is', null)
+
+      if (clientsData) setClients(clientsData)
 
     if (assessmentsData) {
       // Get response counts for each assessment
@@ -138,33 +143,36 @@ export default function ClientsPage() {
     }
 
     // Process existing companies from responses
-    if (responsesData && clientsData) {
-      const clientNames = new Set(clientsData.map(c => c.company_name.toLowerCase()))
-      const companyMap: Record<string, { scores: number[], sizes: string[] }> = {}
+      if (responsesData) {
+        const clientNames = new Set((clientsData || []).map(c => c.company_name.toLowerCase()))
+        const companyMap: Record<string, { scores: number[], sizes: string[] }> = {}
 
-      responsesData.forEach(r => {
-        if (r.respondent_company && !clientNames.has(r.respondent_company.toLowerCase())) {
-          if (!companyMap[r.respondent_company]) {
-            companyMap[r.respondent_company] = { scores: [], sizes: [] }
+        responsesData.forEach(r => {
+          if (r.respondent_company && !clientNames.has(r.respondent_company.toLowerCase())) {
+            if (!companyMap[r.respondent_company]) {
+              companyMap[r.respondent_company] = { scores: [], sizes: [] }
+            }
+            if (r.overall_score) companyMap[r.respondent_company].scores.push(r.overall_score)
+            if (r.company_size) companyMap[r.respondent_company].sizes.push(r.company_size)
           }
-          if (r.overall_score) companyMap[r.respondent_company].scores.push(r.overall_score)
-          if (r.company_size) companyMap[r.respondent_company].sizes.push(r.company_size)
-        }
-      })
+        })
 
-      const companies: ExistingCompany[] = Object.entries(companyMap).map(([name, data]) => ({
-        name,
-        responseCount: data.scores.length,
-        avgScore: data.scores.length > 0
-          ? data.scores.reduce((a, b) => a + b, 0) / data.scores.length
-          : 0,
-        companySize: data.sizes[0] || null
-      })).sort((a, b) => b.responseCount - a.responseCount)
+        const companies: ExistingCompany[] = Object.entries(companyMap).map(([name, data]) => ({
+          name,
+          responseCount: data.scores.length,
+          avgScore: data.scores.length > 0
+            ? data.scores.reduce((a, b) => a + b, 0) / data.scores.length
+            : 0,
+          companySize: data.sizes[0] || null
+        })).sort((a, b) => b.responseCount - a.responseCount)
 
-      setExistingCompanies(companies)
+        setExistingCompanies(companies)
+      }
+    } catch (error) {
+      console.error('Error fetching data:', error)
+    } finally {
+      setLoading(false)
     }
-
-    setLoading(false)
   }
 
   const importCompany = async (company: ExistingCompany) => {
