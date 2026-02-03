@@ -20,7 +20,7 @@ export default function Home() {
       // Check if access code exists in assessments
       const { data: assessment, error: assessmentError } = await supabase
         .from('ttc_assessments')
-        .select('*')
+        .select('*, client:ttc_clients(*)')
         .eq('access_code', accessCode.toUpperCase())
         .eq('status', 'active')
         .single()
@@ -35,6 +35,15 @@ export default function Home() {
       const sessionId = crypto.randomUUID()
       localStorage.setItem('ttc_session_id', sessionId)
       localStorage.setItem('ttc_assessment_id', assessment.id)
+
+      // Store client info for pre-filling the survey
+      if (assessment.client) {
+        localStorage.setItem('ttc_client_info', JSON.stringify({
+          company_name: assessment.client.company_name,
+          employee_count: assessment.client.employee_count,
+          industry: assessment.client.industry
+        }))
+      }
 
       router.push(`/survey/${assessment.id}?session=${sessionId}`)
     } catch {
@@ -73,7 +82,7 @@ export default function Home() {
                 id="accessCode"
                 value={accessCode}
                 onChange={(e) => setAccessCode(e.target.value.toUpperCase())}
-                placeholder="e.g. DEMO2026"
+                placeholder="e.g. TECH2026"
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 text-center text-lg font-mono uppercase"
                 required
               />

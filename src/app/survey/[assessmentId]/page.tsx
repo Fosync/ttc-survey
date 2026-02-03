@@ -38,11 +38,18 @@ interface RespondentInfo {
   companySize: string
 }
 
+interface ClientInfo {
+  company_name: string
+  employee_count: string
+  industry: string
+}
+
 export default function SurveyPage({ params }: { params: Promise<{ assessmentId: string }> }) {
   const { assessmentId } = use(params)
   const router = useRouter()
-  
+
   const [step, setStep] = useState<'intro' | 'survey'>('intro')
+  const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null)
   const [respondentInfo, setRespondentInfo] = useState<RespondentInfo>({
     name: '', email: '', company: '', department: '', role: '', companySize: ''
   })
@@ -57,6 +64,23 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
+    // Load client info from localStorage (set during access code validation)
+    const storedClientInfo = localStorage.getItem('ttc_client_info')
+    if (storedClientInfo) {
+      try {
+        const info = JSON.parse(storedClientInfo) as ClientInfo
+        setClientInfo(info)
+        // Pre-fill company name and size from client info
+        setRespondentInfo(prev => ({
+          ...prev,
+          company: info.company_name || '',
+          companySize: info.employee_count || ''
+        }))
+      } catch {
+        // Invalid JSON, ignore
+      }
+    }
+
     async function init() {
       const { data: questions, error } = await supabase
         .from('ttc_questions')
@@ -248,8 +272,17 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
                 <input type="email" value={respondentInfo.email} onChange={(e) => setRespondentInfo({ ...respondentInfo, email: e.target.value })} className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500" placeholder="john@company.com" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Company / Organization <span className="text-gray-400 font-normal">(optional)</span></label>
-                <input type="text" value={respondentInfo.company} onChange={(e) => setRespondentInfo({ ...respondentInfo, company: e.target.value })} className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500" placeholder="Acme Inc." />
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Company / Organization {clientInfo ? '' : <span className="text-gray-400 font-normal">(optional)</span>}
+                </label>
+                {clientInfo ? (
+                  <div className="w-full px-4 py-3 border border-gray-200 rounded-lg bg-gray-50 text-gray-700 font-medium">
+                    {respondentInfo.company}
+                    <span className="text-xs text-gray-400 ml-2">(pre-filled)</span>
+                  </div>
+                ) : (
+                  <input type="text" value={respondentInfo.company} onChange={(e) => setRespondentInfo({ ...respondentInfo, company: e.target.value })} className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500" placeholder="Acme Inc." />
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Department <span className="text-gray-400 font-normal">(optional)</span></label>
@@ -266,11 +299,20 @@ export default function SurveyPage({ params }: { params: Promise<{ assessmentId:
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Company Size <span className="text-gray-400 font-normal">(optional)</span></label>
-                <select value={respondentInfo.companySize} onChange={(e) => setRespondentInfo({ ...respondentInfo, companySize: e.target.value })} className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-white">
-                  <option value="">Select company size...</option>
-                  {COMPANY_SIZES.map((size) => (<option key={size} value={size}>{size} employees</option>))}
-                </select>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Company Size {clientInfo ? '' : <span className="text-gray-400 font-normal">(optional)</span>}
+                </label>
+                {clientInfo ? (
+                  <div className="w-full px-4 py-3 border border-gray-200 rounded-lg bg-gray-50 text-gray-700 font-medium">
+                    {respondentInfo.companySize} employees
+                    <span className="text-xs text-gray-400 ml-2">(pre-filled)</span>
+                  </div>
+                ) : (
+                  <select value={respondentInfo.companySize} onChange={(e) => setRespondentInfo({ ...respondentInfo, companySize: e.target.value })} className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-white">
+                    <option value="">Select company size...</option>
+                    {COMPANY_SIZES.map((size) => (<option key={size} value={size}>{size} employees</option>))}
+                  </select>
+                )}
               </div>
               <button onClick={startSurvey} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors mt-4">
                 Start Survey →
