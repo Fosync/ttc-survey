@@ -173,7 +173,8 @@ export default function AdminDashboard() {
           </div>
           <Link href="/admin/clients" className="bg-slate-600 hover:bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-medium">👥 Clients</Link>
             <Link href="/admin/analytics" className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium">📊 Analytics</Link>
-            <Link href="/admin/orgchart" className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium mr-4">🏢 Org Chart</Link>
+            <Link href="/admin/orgchart" className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium">🏢 Org Chart</Link>
+            <Link href="/admin/settings" className="text-gray-500 hover:text-gray-700 text-sm mr-4">Settings</Link>
           <button onClick={handleLogout} className="text-gray-500 hover:text-gray-700 text-sm">
             Logout
           </button>

@@ -35,14 +35,14 @@ const toPercentage = (score: number | { percentage: number } | undefined): numbe
   return Math.round((score / 4) * 100)
 }
 
+// Heat color based on percentage (converted from 1-4 scale)
+// 3.5+ = 87.5%+ (Strong), 2.8-3.4 = 70-87% (Functional), 2.0-2.7 = 50-70% (Gaps), <2.0 = <50% (Friction)
 const getHeatColor = (score: number | null) => {
   if (score === null || score === undefined) return 'bg-gray-100'
-  if (score >= 85) return 'bg-emerald-500'
-  if (score >= 75) return 'bg-emerald-400'
-  if (score >= 65) return 'bg-yellow-400'
-  if (score >= 55) return 'bg-orange-400'
-  if (score >= 45) return 'bg-orange-500'
-  return 'bg-red-500'
+  if (score >= 87.5) return 'bg-emerald-500'  // Strong (3.5+)
+  if (score >= 70) return 'bg-yellow-400'      // Functional (2.8-3.4)
+  if (score >= 50) return 'bg-orange-500'      // Gaps (2.0-2.7)
+  return 'bg-red-500'                          // Friction (<2.0)
 }
 
 const getTextColor = (score: number | null) => {
@@ -64,6 +64,11 @@ export default function AnalyticsPage() {
   const [deptGaps, setDeptGaps] = useState<{section: string, highDept: string, lowDept: string, gap: number}[]>([])
   const [speakingUpAlerts, setSpeakingUpAlerts] = useState<{dept: string, score: number}[]>([])
   const [perceptionGap, setPerceptionGap] = useState<{section: string, execScore: number, staffScore: number, gap: number}[]>([])
+
+  // AI Report
+  const [aiReport, setAiReport] = useState<string | null>(null)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiLanguage, setAiLanguage] = useState<'en' | 'tr'>('en')
 
   const companies = [...new Set(responses.map(r => r.respondent_company).filter(Boolean))] as string[]
   const filteredResponses = companyFilter 
@@ -243,6 +248,90 @@ export default function AnalyticsPage() {
     ? Math.round(filteredResponses.reduce((a, r) => a + (toPercentage(r.overall_score) || 0), 0) / filteredResponses.length)
     : 0
 
+  const generateCompanyReport = async () => {
+    setAiLoading(true)
+    setAiReport(null)
+
+    try {
+      // Calculate section averages (convert to 1-4 scale)
+      const sectionScores: Record<string, number> = {}
+      SECTIONS.forEach(s => {
+        const allScores = filteredResponses
+          .map(r => getSectionScore(r, s.key))
+          .filter(x => x !== null) as number[]
+        if (allScores.length > 0) {
+          const avgPct = allScores.reduce((a, b) => a + b, 0) / allScores.length
+          sectionScores[s.key] = (avgPct / 100) * 4 // Convert back to 1-4 scale
+        }
+      })
+
+      // Department breakdown
+      const departmentBreakdown: Record<string, { count: number; avgScore: number }> = {}
+      const deptCounts: Record<string, { count: number; total: number }> = {}
+      filteredResponses.forEach(r => {
+        const dept = r.respondent_department || 'Unknown'
+        if (!deptCounts[dept]) deptCounts[dept] = { count: 0, total: 0 }
+        deptCounts[dept].count++
+        deptCounts[dept].total += (toPercentage(r.overall_score) || 0) / 100 * 4
+      })
+      Object.entries(deptCounts).forEach(([dept, data]) => {
+        departmentBreakdown[dept] = {
+          count: data.count,
+          avgScore: data.total / data.count
+        }
+      })
+
+      // Role breakdown
+      const roleBreakdown: Record<string, { count: number; avgScore: number }> = {}
+      const roleCounts: Record<string, { count: number; total: number }> = {}
+      filteredResponses.forEach(r => {
+        const role = r.respondent_role || 'Unknown'
+        if (!roleCounts[role]) roleCounts[role] = { count: 0, total: 0 }
+        roleCounts[role].count++
+        roleCounts[role].total += (toPercentage(r.overall_score) || 0) / 100 * 4
+      })
+      Object.entries(roleCounts).forEach(([role, data]) => {
+        roleBreakdown[role] = {
+          count: data.count,
+          avgScore: data.total / data.count
+        }
+      })
+
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'company',
+          language: aiLanguage,
+          data: {
+            overallScore: (avgOverall / 100) * 4, // Convert to 1-4 scale
+            companyName: companyFilter || 'All Companies',
+            totalResponses: filteredResponses.length,
+            sectionScores,
+            departmentBreakdown,
+            roleBreakdown,
+            perceptionGaps: perceptionGap.map(g => ({
+              from: 'Leadership',
+              to: 'Staff',
+              gap: (g.gap / 100) * 4
+            }))
+          }
+        })
+      })
+
+      const result = await response.json()
+      if (result.error) {
+        setAiReport(`Error: ${result.error}`)
+      } else {
+        setAiReport(result.analysis)
+      }
+    } catch (error) {
+      setAiReport(`Error: ${error instanceof Error ? error.message : 'Failed to generate report'}`)
+    }
+
+    setAiLoading(false)
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -306,6 +395,55 @@ export default function AnalyticsPage() {
                 <p className="text-sm text-gray-500">Avg Score</p>
                 <p className={`text-3xl font-bold ${avgOverall >= 75 ? 'text-emerald-600' : avgOverall >= 50 ? 'text-yellow-600' : 'text-red-600'}`}>{avgOverall}%</p>
               </div>
+            </div>
+
+            {/* AI Company Report */}
+            <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl shadow-sm p-6 mb-8 border border-blue-100">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+                  <span className="text-xl">🤖</span> AI Company Report
+                </h2>
+                <div className="flex items-center gap-3">
+                  <select
+                    value={aiLanguage}
+                    onChange={(e) => setAiLanguage(e.target.value as 'en' | 'tr')}
+                    className="px-3 py-1 border rounded-lg text-sm bg-white"
+                  >
+                    <option value="en">English</option>
+                    <option value="tr">Turkce</option>
+                  </select>
+                  <Link
+                    href="/admin/settings"
+                    className="text-gray-500 hover:text-gray-700 text-sm"
+                  >
+                    Settings
+                  </Link>
+                  <button
+                    onClick={generateCompanyReport}
+                    disabled={aiLoading || filteredResponses.length === 0}
+                    className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+                  >
+                    {aiLoading ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                        Generating...
+                      </>
+                    ) : (
+                      <>Generate Company Report</>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {aiReport ? (
+                <div className="bg-white rounded-lg p-4 prose prose-sm max-w-none">
+                  <div className="whitespace-pre-wrap text-gray-700">{aiReport}</div>
+                </div>
+              ) : (
+                <p className="text-gray-500 text-sm">
+                  Click "Generate Company Report" to get AI-powered insights about {companyFilter || 'all companies'}.
+                </p>
+              )}
             </div>
 
             {/* Alerts Section */}

@@ -113,6 +113,9 @@ export default function ResponseDetail({ params }: { params: Promise<{ id: strin
   const { id } = use(params)
   const [data, setData] = useState<ResponseData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiLanguage, setAiLanguage] = useState<'en' | 'tr'>('en')
   const router = useRouter()
 
   useEffect(() => {
@@ -132,6 +135,48 @@ export default function ResponseDetail({ params }: { params: Promise<{ id: strin
       .single()
     if (response) setData(response)
     setLoading(false)
+  }
+
+  const generateAIAnalysis = async () => {
+    if (!data) return
+    setAiLoading(true)
+    setAiAnalysis(null)
+
+    try {
+      // Convert section scores to 1-4 scale
+      const sectionScores: Record<string, number> = {}
+      Object.entries(data.section_scores).forEach(([key, val]) => {
+        const score = getSectionValue(val)
+        if (score !== null) sectionScores[key] = score
+      })
+
+      const response = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'individual',
+          language: aiLanguage,
+          data: {
+            overallScore: data.overall_score,
+            department: data.respondent_department || undefined,
+            role: data.respondent_role || undefined,
+            sectionScores,
+            openFeedback: Object.values(data.open_responses || {}).filter(v => v?.trim())
+          }
+        })
+      })
+
+      const result = await response.json()
+      if (result.error) {
+        setAiAnalysis(`Error: ${result.error}`)
+      } else {
+        setAiAnalysis(result.analysis)
+      }
+    } catch (error) {
+      setAiAnalysis(`Error: ${error instanceof Error ? error.message : 'Failed to generate analysis'}`)
+    }
+
+    setAiLoading(false)
   }
 
   if (loading) {
@@ -260,37 +305,74 @@ export default function ResponseDetail({ params }: { params: Promise<{ id: strin
           </div>
         </div>
 
-        {/* AI Interpretation */}
+        {/* Quick Summary */}
         <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
-          <h2 className="font-semibold text-gray-900 mb-4">🤖 AI Interpretation</h2>
+          <h2 className="font-semibold text-gray-900 mb-4">Quick Summary</h2>
           <p className="text-gray-700 mb-6">{interpretation.summary}</p>
-          
-          <h3 className="text-lg font-medium text-emerald-700 mb-3">✅ Strengths</h3>
-          <div className="space-y-3 mb-6">
-            {interpretation.strengths.map((s, i) => (
-              <div key={i} className="bg-emerald-50 rounded-lg p-4">
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-medium text-emerald-800">{s.area}</span>
-                  <span className="text-emerald-600 font-bold">{s.score.toFixed(2)}/4.0</span>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <h3 className="text-sm font-medium text-emerald-700 mb-2">Strengths</h3>
+              {interpretation.strengths.map((s, i) => (
+                <div key={i} className="flex justify-between items-center bg-emerald-50 rounded-lg p-3 mb-2">
+                  <span className="text-sm text-emerald-800">{s.area}</span>
+                  <span className="text-emerald-600 font-bold text-sm">{s.score.toFixed(2)}</span>
                 </div>
-                <p className="text-sm text-emerald-700">{s.insight}</p>
-              </div>
-            ))}
+              ))}
+            </div>
+            <div>
+              <h3 className="text-sm font-medium text-orange-700 mb-2">Priority Areas</h3>
+              {interpretation.priorities.map((p, i) => (
+                <div key={i} className="flex justify-between items-center bg-orange-50 rounded-lg p-3 mb-2">
+                  <span className="text-sm text-orange-800">{p.area}</span>
+                  <span className="text-orange-600 font-bold text-sm">{p.score.toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* AI Analysis */}
+        <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl shadow-sm p-6 mb-6 border border-blue-100">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+              <span className="text-xl">🤖</span> Gemini AI Analysis
+            </h2>
+            <div className="flex items-center gap-3">
+              <select
+                value={aiLanguage}
+                onChange={(e) => setAiLanguage(e.target.value as 'en' | 'tr')}
+                className="px-3 py-1 border rounded-lg text-sm bg-white"
+              >
+                <option value="en">English</option>
+                <option value="tr">Turkce</option>
+              </select>
+              <button
+                onClick={generateAIAnalysis}
+                disabled={aiLoading}
+                className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
+              >
+                {aiLoading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                    Analyzing...
+                  </>
+                ) : (
+                  <>Generate AI Analysis</>
+                )}
+              </button>
+            </div>
           </div>
 
-          <h3 className="text-lg font-medium text-orange-700 mb-3">⚠️ Priority Areas</h3>
-          <div className="space-y-3 mb-6">
-            {interpretation.priorities.map((p, i) => (
-              <div key={i} className="bg-orange-50 rounded-lg p-4">
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-medium text-orange-800">{p.area}</span>
-                  <span className="text-orange-600 font-bold">{p.score.toFixed(2)}/4.0</span>
-                </div>
-                <p className="text-sm text-orange-700 mb-2">{p.insight}</p>
-                <p className="text-sm text-orange-900 font-medium">💡 {p.recommendation}</p>
-              </div>
-            ))}
-          </div>
+          {aiAnalysis ? (
+            <div className="bg-white rounded-lg p-4 prose prose-sm max-w-none">
+              <div className="whitespace-pre-wrap text-gray-700">{aiAnalysis}</div>
+            </div>
+          ) : (
+            <p className="text-gray-500 text-sm">
+              Click "Generate AI Analysis" to get a detailed analysis of this response using Gemini AI.
+            </p>
+          )}
         </div>
 
         {/* Open Responses */}
