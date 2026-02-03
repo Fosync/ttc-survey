@@ -25,6 +25,13 @@ interface Assessment {
   response_count?: number
 }
 
+interface ExistingCompany {
+  name: string
+  responseCount: number
+  avgScore: number
+  companySize: string | null
+}
+
 const INDUSTRIES = [
   'Technology',
   'Finance / Banking',
@@ -60,11 +67,13 @@ const generateAccessCode = (companyName: string): string => {
 export default function ClientsPage() {
   const [clients, setClients] = useState<Client[]>([])
   const [assessments, setAssessments] = useState<Assessment[]>([])
+  const [existingCompanies, setExistingCompanies] = useState<ExistingCompany[]>([])
   const [loading, setLoading] = useState(true)
   const [showNewClient, setShowNewClient] = useState(false)
   const [showNewAssessment, setShowNewAssessment] = useState(false)
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
+  const [importingCompany, setImportingCompany] = useState<string | null>(null)
   const router = useRouter()
 
   // New client form
@@ -104,7 +113,15 @@ export default function ClientsPage() {
       .select('*')
       .order('created_at', { ascending: false })
 
+    // Fetch existing companies from responses (not yet in ttc_clients)
+    const { data: responsesData } = await supabase
+      .from('ttc_responses')
+      .select('respondent_company, company_size, overall_score')
+      .not('completed_at', 'is', null)
+      .not('respondent_company', 'is', null)
+
     if (clientsData) setClients(clientsData)
+
     if (assessmentsData) {
       // Get response counts for each assessment
       const assessmentsWithCounts = await Promise.all(
@@ -119,7 +136,70 @@ export default function ClientsPage() {
       )
       setAssessments(assessmentsWithCounts)
     }
+
+    // Process existing companies from responses
+    if (responsesData && clientsData) {
+      const clientNames = new Set(clientsData.map(c => c.company_name.toLowerCase()))
+      const companyMap: Record<string, { scores: number[], sizes: string[] }> = {}
+
+      responsesData.forEach(r => {
+        if (r.respondent_company && !clientNames.has(r.respondent_company.toLowerCase())) {
+          if (!companyMap[r.respondent_company]) {
+            companyMap[r.respondent_company] = { scores: [], sizes: [] }
+          }
+          if (r.overall_score) companyMap[r.respondent_company].scores.push(r.overall_score)
+          if (r.company_size) companyMap[r.respondent_company].sizes.push(r.company_size)
+        }
+      })
+
+      const companies: ExistingCompany[] = Object.entries(companyMap).map(([name, data]) => ({
+        name,
+        responseCount: data.scores.length,
+        avgScore: data.scores.length > 0
+          ? data.scores.reduce((a, b) => a + b, 0) / data.scores.length
+          : 0,
+        companySize: data.sizes[0] || null
+      })).sort((a, b) => b.responseCount - a.responseCount)
+
+      setExistingCompanies(companies)
+    }
+
     setLoading(false)
+  }
+
+  const importCompany = async (company: ExistingCompany) => {
+    setImportingCompany(company.name)
+
+    const { data, error } = await supabase
+      .from('ttc_clients')
+      .insert({
+        company_name: company.name,
+        industry: 'Other',
+        employee_count: company.companySize || '51-200',
+        contact_email: null
+      })
+      .select()
+      .single()
+
+    if (error) {
+      alert('Error importing company: ' + error.message)
+      setImportingCompany(null)
+      return
+    }
+
+    // Add to clients and remove from existing companies
+    setClients([data, ...clients])
+    setExistingCompanies(existingCompanies.filter(c => c.name !== company.name))
+
+    // Offer to create assessment
+    setSelectedClient(data)
+    setNewAssessment({
+      client_id: data.id,
+      title: `Q${Math.ceil((new Date().getMonth() + 1) / 3)} ${new Date().getFullYear()} Communication Check`,
+      access_code: generateAccessCode(data.company_name)
+    })
+    setShowNewAssessment(true)
+    setImportingCompany(null)
   }
 
   const createClient = async (e: React.FormEvent) => {
@@ -261,10 +341,45 @@ export default function ClientsPage() {
           <div className="bg-white rounded-xl shadow-sm p-6">
             <p className="text-sm text-gray-500 mb-1">Total Responses</p>
             <p className="text-3xl font-bold text-blue-600">
-              {assessments.reduce((sum, a) => sum + (a.response_count || 0), 0)}
+              {assessments.reduce((sum, a) => sum + (a.response_count || 0), 0) + existingCompanies.reduce((sum, c) => sum + c.responseCount, 0)}
             </p>
           </div>
         </div>
+
+        {/* Existing Companies (from responses, not yet in clients) */}
+        {existingCompanies.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-6 mb-8">
+            <div className="flex justify-between items-center mb-4">
+              <div>
+                <h2 className="font-semibold text-amber-800">Existing Companies from Surveys</h2>
+                <p className="text-sm text-amber-600">These companies have survey responses but are not registered as clients yet</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {existingCompanies.map(company => (
+                <div key={company.name} className="bg-white rounded-lg p-4 border border-amber-200">
+                  <div className="flex justify-between items-start mb-2">
+                    <h3 className="font-medium text-gray-900">{company.name}</h3>
+                    <span className="text-xs bg-amber-100 text-amber-700 px-2 py-1 rounded">
+                      {company.responseCount} responses
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-500 mb-3">
+                    Avg Score: <span className="font-medium">{company.avgScore.toFixed(1)}%</span>
+                    {company.companySize && ` • ${company.companySize} employees`}
+                  </p>
+                  <button
+                    onClick={() => importCompany(company)}
+                    disabled={importingCompany === company.name}
+                    className="w-full bg-amber-600 hover:bg-amber-700 disabled:bg-gray-400 text-white px-3 py-2 rounded-lg text-sm font-medium"
+                  >
+                    {importingCompany === company.name ? 'Importing...' : 'Import as Client'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Clients */}
